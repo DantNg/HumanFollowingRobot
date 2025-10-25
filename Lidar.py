@@ -218,13 +218,15 @@ class Lidar:
         wrap_hysteresis_deg=20.0,
         angle_round=1.0,         # gộp theo 1° (đổi None nếu muốn giữ nguyên)
         prefer="min",            # 'min' | 'last' | 'mean'
-        max_range_mm=6000.0
+        max_range_mm=6000.0,
+        min_range_mm=200.0       # lọc các điểm dưới ngưỡng này
     ):
         """
         Gom các packet liên tiếp thành 1 vòng quét (~360°) rồi trả về dict{angle_deg: dist_mm}.
         - Không vòng lặp vô hạn: có tổng timeout.
         - wrap detection: khi góc bắt đầu của packet mới < góc bắt đầu trước đó - wrap_hysteresis_deg.
         - min_coverage_deg: yêu cầu độ phủ góc tối thiểu để coi là 1 vòng.
+        - min_range_mm: bỏ các điểm có khoảng cách < ngưỡng này (bất thường)
         """
         deadline = time.time() + total_timeout
         first_pkt_start = None
@@ -248,9 +250,9 @@ class Lidar:
             angles = res["angles_deg"]
             dists  = res["dist_mm"]
 
-            # lọc range
+            # lọc range (bỏ <=0, < min_range_mm, > max_range_mm)
             for i in range(len(dists)):
-                if dists[i] <= 0 or dists[i] > max_range_mm:
+                if dists[i] <= 0 or dists[i] < min_range_mm or dists[i] > max_range_mm:
                     dists[i] = 0.0  # bỏ
 
             if not angles:
@@ -300,6 +302,8 @@ class Lidar:
 
         # Hết thời gian mà chưa đủ 1 vòng
         return None
+
+
 
 
 if __name__ == "__main__":
