@@ -1,0 +1,8 @@
+ultralytics>=8.2.0
+opencv-python>=4.8.1.78
+numpy>=1.24
+scipy>=1.11
+filterpy>=1.4.5
+pyserial>=3.5
+pyyaml>=6.0.2
+matplotlib>=3.7.0

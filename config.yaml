@@ -1,0 +1,86 @@
+
+app:
+  camera_index: 0              # Windows camera index
+  cam_fov_deg: 84.0            # horizontal FOV (adjust per camera)
+  yolo_weights: "yolo11n.pt"   # path to person detection weights
+  face_yolo_weights: "yolov11n-face.pt"  # path to face detection weights
+  conf_thres: 0.5              # person detection confidence
+  face_conf_thres: 0.5         # face detection confidence
+  iou_thres: 0.5
+  max_det: 5
+  target_class: 0              # 0 = person in COCO
+
+tracking:
+  iou_match_thres: 0.3
+  max_age_sec: 1.0
+
+follow:
+  ref_distance_m: 1.5
+  stop_distance_m: 0.8
+  resume_distance_m: 1.0
+  v_max: 0.5                        # Reduced from 1.0 to 0.5 m/s (safer speed)
+  w_max: 0.8                        # Reduced from 1.4 to 0.8 rad/s (slower turning)
+  kd: 0.8
+  kx: 1.4
+  occlusion_grace_s: 1.8
+  lost_timeout_s: 5.0
+  
+  # Target selection settings  
+  lock_to_first_person: true        # Lock to first detected person and stick with them
+  
+  # Controller rate limiting (more responsive for bbox control)
+  dv_max: 2.0                       # Max velocity change per step (m/s)
+  dw_max: 3.0                       # Max angular change per step (rad/s)
+  
+  # Bounding box based control settings (REALISTIC thresholds)
+  bbox_very_close_threshold: 0.75   # height ratio > 0.75 = very close, stop (người chiếm >75% màn hình)
+  bbox_close_threshold: 0.6         # height ratio > 0.6 = close, slow (người chiếm >60% màn hình)
+  bbox_ideal_threshold: 0.4         # height ratio > 0.4 = ideal distance (người chiếm >40% màn hình)
+  bbox_far_threshold: 0.2           # height ratio > 0.2 = far, speed up (người chiếm >20% màn hình)
+  
+  # Face-based control settings (MORE ACCURATE for distance)
+  face_very_close_threshold: 0.25   # face height > 25% frame = very close
+  face_close_threshold: 0.15        # face height > 15% frame = close
+  face_ideal_threshold: 0.08        # face height > 8% frame = ideal
+  face_far_threshold: 0.04          # face height > 4% frame = far
+  
+  # Control method priority
+  use_face_control: false           # DISABLE face detection for now
+  use_aspect_ratio_control: true    # NEW: Use aspect ratio for better distance estimation
+  fallback_to_body_bbox: true       # Fallback to body bbox if no face
+  
+  # Aspect ratio based control settings (BETTER distance estimation)
+  aspect_very_close_threshold: 1.2  # aspect < 1.2 = partial body (too close)
+  aspect_close_threshold: 1.8       # aspect < 1.8 = upper body (close)
+  aspect_ideal_threshold: 2.5       # aspect < 2.5 = full body (ideal)
+  # aspect >= 2.5 = distant full body (far)
+  
+  speed_very_close: 0.0             # Speed when very close (dừng)
+  speed_close: 0.15                 # Speed when close (chậm hơn)
+  speed_ideal: 0.3                  # Speed at ideal distance (vừa phải)
+  speed_far: 0.5                    # Speed when far (nhanh hơn, tối đa 0.5)
+
+lidar:
+  source: "mock"               # "mock" | "rplidar" | "ydlidar"
+  port: "COM7"                 # if using real LiDAR over serial/USB
+  baudrate: 115200
+  frame_hz: 10
+  angle_min_deg: -90
+  angle_max_deg:  90
+
+serial:
+  port: "COM16"
+  baudrate: 115200
+  line_ending: "\\n"
+  timeout_s: 0.02
+  # payload_mode: "signed_pct" | "pct_plus_dir"
+  payload_mode: "signed_pct"   # default: send -100..+100 for both speed & turn
+  
+  # Smart update settings (ENABLED for smoother operation)
+  update_threshold: 0.05       # Minimum change to trigger update (5%)
+  update_interval: 0.1         # Minimum time between updates (100ms)
+  force_stop_update: true      # Always send stop commands immediately
+
+physics:
+  v_phys_max_mps: 1.2   # robot's real max linear speed (for normalization → %)
+  w_phys_max_rps: 2.0   # robot's real max angular speed (for normalization → %)
