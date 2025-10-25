@@ -3,6 +3,19 @@ import cv2, numpy as np, time, math
 from ultralytics import YOLO
 
 class HumanTracking:
+    def get_action_from_state(self, x_norm, speed_pct, nav_box):
+        """Trả về action: 'forward', 'left', 'right', 'stop' dựa vào trạng thái tracking."""
+        if nav_box is None:
+            return "stop"
+        if abs(x_norm) < self.CENTER_ZONE:
+            if speed_pct > 0:
+                return "forward"
+            else:
+                return "stop"
+        elif x_norm < 0:
+            return "left"
+        else:
+            return "right"
     FACE_WEIGHTS   = "yolov11n-face.pt"
     PERSON_WEIGHTS = "yolo11n.pt"
     CAM_INDEX      = 0
@@ -191,6 +204,7 @@ class HumanTracking:
         speed_pct = 0
         label_ex = ""
         nav_box = state["person_lock"] if state["person_lock"] is not None else state["face_lock"]
+        # Xác định action bằng hàm riêng
         if nav_box is not None:
             found = True
             x1,y1,x2,y2 = nav_box
@@ -208,13 +222,16 @@ class HumanTracking:
                 label_ex = "PERSON-LOCK"
             ratio = (y2-y1)/H
             speed_pct = self.speed_bucket_from_ratio(ratio)
-            # Điều khiển động cơ sẽ được thêm sau
+            action = self.get_action_from_state(x_norm, speed_pct, nav_box)
             cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
             cv2.putText(frame, f"{label_ex} x={x_norm:.2f} sp={speed_pct}", (x1,max(0,y1-8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
             cv2.circle(frame,(int(cx),int(cy)),6,(0,0,255),2)
-        if not found:
+        else:
+            action = self.get_action_from_state(0.0, 0, None)
             cv2.putText(frame, "LOST: searching...", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+        print(f"[TRACKING ACTION] {action}")
+        state["action"] = action
         if state["face_lock"] is not None and nav_box is not state["face_lock"]:
             x1,y1,x2,y2 = state["face_lock"]
             cv2.rectangle(frame,(x1,y1),(x2,y2),(255,200,0),2)
