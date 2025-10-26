@@ -304,8 +304,6 @@ class Lidar:
         return None
 
 
-
-
 if __name__ == "__main__":
     with Lidar("COM15", 115200, has_intensity=False, model="triangle", io_timeout=0.2) as ld:
         scan = ld.get_full_rotation_dict(
@@ -321,4 +319,5 @@ if __name__ == "__main__":
         else:
             print(f"✅ Lấy được {len(scan)} bin góc")
             for ang, dist in sorted(scan.items()):
-                print(f"{ang:7.2f}° -> {dist:8.2f} mm")
+                if ang >159 and ang < 201:
+                    print(f"{ang:7.2f}° -> {dist:8.2f} mm")

@@ -10,7 +10,7 @@ model = YOLO(MODEL_PATH)
 
 cap = cv2.VideoCapture(0)
 # --- Serial setup ---
-SERIAL_PORT = "COM19"  # Đổi thành cổng của bạn
+SERIAL_PORT = "COM20"  # Đổi thành cổng của bạn
 SERIAL_BAUD = 115200
 try:
     ser = serial.Serial(SERIAL_PORT, SERIAL_BAUD, timeout=0.1)
@@ -54,7 +54,7 @@ while True:
     results = model(frame[..., ::-1], conf=0.5, classes=[0])  # Only detect person (class 0)
     h, w = frame.shape[:2]
 
-    found_person = False  # <--- Thêm biến này
+    found_person = False  
     selected_box = None  # Bbox được chọn để điều khiển
 
     # --- Target Locking Algorithm for Head Tracking ---

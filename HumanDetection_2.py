@@ -5,15 +5,15 @@ import serial
 # ================== Config ==================
 FACE_WEIGHTS   = "yolov11n-face.pt"   # model face
 PERSON_WEIGHTS = "yolo11n.pt"         # model person (class 0)
-CAM_INDEX      = 0
+CAM_INDEX      = 1
 CONF_FACE      = 0.4
 CONF_PERSON    = 0.5
 
-SERIAL_PORT = "COM20"
+SERIAL_PORT = "COM16"
 SERIAL_BAUD = 115200
 
 # Điều khiển
-MAX_PWM = 50           # 0..50 theo MCU của bạn
+MAX_PWM = 20           # 0..50 theo MCU của bạn
 CENTER_ZONE = 0.15     # |x_norm| < 0.15 coi là Center
 FAR_THR   = 0.07       # các ngưỡng ratio dùng cho bucket speed
 MED_THR   = 0.15

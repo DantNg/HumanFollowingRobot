@@ -2,16 +2,30 @@ from Lidar import Lidar
 
 from MotorController import MotorController
 
-def decide_direction(scan, left_range=(160, 179), right_range=(181, 200), obstacle_thresh=500):
+def decide_direction(scan, left_range=(160, 174), right_range=(186, 200), front_range=(175, 185), obstacle_thresh=500):
     """
     scan: dict {angle: distance}
     left_range: tuple (start_deg, end_deg) for left sector
     right_range: tuple (start_deg, end_deg) for right sector
+    front_range: tuple (start_deg, end_deg) for front sector (stop zone)
     obstacle_thresh: mm, dưới ngưỡng này coi là có vật cản
-    Return: 'forward', 'left', 'right'
+    Return: 'forward', 'left', 'right', 'stop'
     """
     left_blocked = False
     right_blocked = False
+    front_blocked = False
+    
+    # Kiểm tra phía trước (175-185 độ) - điều kiện dừng
+    for ang in range(front_range[0], front_range[1]+1):
+        d = scan.get(float(ang))
+        if d is not None and d > 0 and d < obstacle_thresh:
+            front_blocked = True
+            break
+    
+    # Nếu phía trước bị chặn thì dừng ngay
+    if front_blocked:
+        return 'stop'
+    
     # Kiểm tra bên trái
     for ang in range(left_range[0], left_range[1]+1):
         d = scan.get(float(ang))
@@ -24,9 +38,10 @@ def decide_direction(scan, left_range=(160, 179), right_range=(181, 200), obstac
         if d is not None and d > 0 and d < obstacle_thresh:
             right_blocked = True
             break
-    # Quyết định hướng
+    
+    # Quyết định hướng dựa vào trái/phải
     if left_blocked and right_blocked:
-        return 'stop'  # Cả 2 bên đều bị chặn (có thể xử lý đặc biệt)
+        return 'stop'  # Cả 2 bên đều bị chặn
     elif left_blocked:
         return 'right'
     elif right_blocked:
