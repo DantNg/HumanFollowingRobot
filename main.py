@@ -11,6 +11,12 @@ from Lidar import Lidar
 # TURN_SIGN = 1 means w_cmd follows x_norm; set to -1 to invert left/right turn direction
 TURN_SIGN = -1
 TURN_GAIN = 20   # max absolute turn command
+X_EMA_ALPHA = 0.4    # smoothing for x_norm
+D_EMA_ALPHA = 0.35   # smoothing for lidar front distance
+W_SLEW_STEP = 3      # max change per loop for w_cmd
+V_SLEW_STEP = 3      # max change per loop for v_cmd
+DEADZONE_W = 2       # small turn commands are zeroed
+DEADZONE_V = 1       # small linear commands are zeroed
 
 # ---------------- Head tracking (ported from tracking_backup_19_10) ----------------
 class HeadTracker:
@@ -28,7 +34,8 @@ class HeadTracker:
         self._lock = threading.Lock()
         # Outputs
         self.found = False
-        self.x_norm = 0.0  # -1..1, negative: target on left
+        self.x_norm = 0.0  # -1..1, negative: target on left (smoothed)
+        self._x_smooth = 0.0
         self.sel_head = None     # (x1,y1,x2,y2) head proxy of selected person
         self.sel_person = None   # (x1,y1,x2,y2) full person bbox of selected
 
@@ -98,9 +105,11 @@ class HeadTracker:
             x1,y1,x2,y2 = selected_head
             cx = (x1+x2)/2.0
             x_norm = (cx / w) * 2.0 - 1.0
+            # EMA smoothing for x
+            self._x_smooth = (1.0 - X_EMA_ALPHA) * self._x_smooth + X_EMA_ALPHA * x_norm
             with self._lock:
                 self.found = True
-                self.x_norm = x_norm
+                self.x_norm = self._x_smooth
                 self.sel_head = selected_head
                 self.sel_person = selected_person
         else:
@@ -128,6 +137,7 @@ class LidarLoop:
         self._lock = threading.Lock()
         self.latest_scan = None
         self.thread = threading.Thread(target=self._loop, daemon=True)
+        self._d_front_smooth = None
 
     def start(self):
         if not self.thread.is_alive():
@@ -169,7 +179,13 @@ class LidarLoop:
             return None
         # Use median to be robust
         vals.sort()
-        return vals[len(vals)//2]
+        med = vals[len(vals)//2]
+        # Temporal EMA smoothing
+        if self._d_front_smooth is None:
+            self._d_front_smooth = med
+        else:
+            self._d_front_smooth = (1.0 - D_EMA_ALPHA) * self._d_front_smooth + D_EMA_ALPHA * med
+        return self._d_front_smooth
 
 # ---------------- Motor mixing ----------------
 
@@ -194,32 +210,53 @@ def main():
     tracker = HeadTracker(cam_index=0, model_path="yolo11n.pt")
     lidar_loop = LidarLoop(port="COM15", baud=115200)
     lidar_loop.start()
-
     try:
+        prev_v_cmd = 0
+        prev_w_cmd = 0
         while True:
             frame = tracker.process_once()
             found, x_norm, last_frame, sel_person, sel_head = tracker.get_state()
             # Angular command from camera: rotate toward person
             if found:
-                w_cmd = int(TURN_SIGN * x_norm * TURN_GAIN)  # invert if needed
+                w_cmd_raw = int(TURN_SIGN * x_norm * TURN_GAIN)  # invert if needed
             else:
-                w_cmd = 0
+                w_cmd_raw = 0
             # Linear command from lidar: maintain 900-1000mm
             d_front = lidar_loop.get_front_distance(front_range=(175,185))
             if d_front is None or not found:
-                v_cmd = 0
+                v_cmd_raw = 0
             else:
                 # Deadband 900..1000
                 if 900 <= d_front <= 1000:
-                    v_cmd = 0
+                    v_cmd_raw = 0
                 elif d_front > 1000:
                     # forward proportional
                     err = min(500.0, d_front - 1000.0)  # cap error
-                    v_cmd = int((err / 500.0) * 20)  # up to 20
+                    v_cmd_raw = int((err / 500.0) * 20)  # up to 20
                 else:
                     # too close: move backward
                     err = min(500.0, 900.0 - d_front)
-                    v_cmd = -int((err / 500.0) * 15)  # backward slower up to -15
+                    v_cmd_raw = -int((err / 500.0) * 15)  # backward slower up to -15
+
+            # Apply deadzones
+            if abs(w_cmd_raw) < DEADZONE_W:
+                w_cmd_raw = 0
+            if abs(v_cmd_raw) < DEADZONE_V:
+                v_cmd_raw = 0
+
+            # Slew-rate limiters
+            def slew(prev, target, step):
+                if target > prev + step:
+                    return prev + step
+                if target < prev - step:
+                    return prev - step
+                return target
+
+            w_cmd = slew(prev_w_cmd, w_cmd_raw, W_SLEW_STEP)
+            v_cmd = slew(prev_v_cmd, v_cmd_raw, V_SLEW_STEP)
+            prev_w_cmd = w_cmd
+            prev_v_cmd = v_cmd
+
             ls, ld, rs, rd = mix_to_wheels(v_cmd, w_cmd, v_max=20, w_max=15)
             motor.send_if_changed(ls, ld, rs, rd)
             # Optional view
