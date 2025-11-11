@@ -10,13 +10,15 @@ from Lidar import Lidar
 # ---------------- Control config ----------------
 # TURN_SIGN = 1 means w_cmd follows x_norm; set to -1 to invert left/right turn direction
 TURN_SIGN = -1
-TURN_GAIN = 20   # max absolute turn command
+TURN_GAIN = 18   # camera-based turn responsiveness (lower = slower turning)
+AVOID_TURN_FACTOR = 0.5  # scale for avoidance turns relative to TURN_GAIN (lower = gentler avoidance)
 X_EMA_ALPHA = 0.4    # smoothing for x_norm
 D_EMA_ALPHA = 0.35   # smoothing for lidar front distance
 W_SLEW_STEP = 3      # max change per loop for w_cmd
 V_SLEW_STEP = 3      # max change per loop for v_cmd
 DEADZONE_W = 2       # small turn commands are zeroed
 DEADZONE_V = 1       # small linear commands are zeroed
+OBSTACLE_THRESH = 600  # mm threshold to consider blocked
 
 # ---------------- Head tracking (ported from tracking_backup_19_10) ----------------
 class HeadTracker:
@@ -157,7 +159,7 @@ class LidarLoop:
                 scan = ld.get_full_rotation_dict(
                     total_timeout=0.5,
                     min_coverage_deg=180.0,
-                    wrap_hysteresis_deg=20.0,
+                    wrap_hysteresis_deg=40.0,
                     angle_round=1.0,
                     prefer="min",
                     max_range_mm=3000.0
@@ -186,6 +188,49 @@ class LidarLoop:
         else:
             self._d_front_smooth = (1.0 - D_EMA_ALPHA) * self._d_front_smooth + D_EMA_ALPHA * med
         return self._d_front_smooth
+
+    def get_block_info(
+        self,
+        left_range=(150,179),
+        right_range=(181,210),
+        front_left=(170,179),
+        front_right=(181,190),
+        obstacle_thresh=OBSTACLE_THRESH
+    ):
+        """Return obstacle flags and minimal distances for sectors.
+        stop condition will be evaluated in main using front_left & front_right.
+        """
+        with self._lock:
+            scan = self.latest_scan
+        info = {
+            "blocked_left": False,
+            "blocked_right": False,
+            "front_left_blocked": False,
+            "front_right_blocked": False,
+            "left_min": None,
+            "right_min": None,
+        }
+        if scan is None:
+            return info
+        # helper
+        def sector_min(rng):
+            vals = []
+            for ang in range(rng[0], rng[1]+1):
+                d = scan.get(float(ang))
+                if d is not None and d > 0:
+                    vals.append(d)
+            return min(vals) if vals else None
+        left_min = sector_min(left_range)
+        right_min = sector_min(right_range)
+        fl_min = sector_min(front_left)
+        fr_min = sector_min(front_right)
+        info["left_min"] = left_min
+        info["right_min"] = right_min
+        info["blocked_left"] = (left_min is not None and left_min < obstacle_thresh)
+        info["blocked_right"] = (right_min is not None and right_min < obstacle_thresh)
+        info["front_left_blocked"] = (fl_min is not None and fl_min < obstacle_thresh)
+        info["front_right_blocked"] = (fr_min is not None and fr_min < obstacle_thresh)
+        return info
 
 # ---------------- Motor mixing ----------------
 
@@ -223,6 +268,61 @@ def main():
                 w_cmd_raw = 0
             # Linear command from lidar: maintain 900-1000mm
             d_front = lidar_loop.get_front_distance(front_range=(175,185))
+            block = lidar_loop.get_block_info(
+                left_range=(140,179), right_range=(181,220),
+                front_left=(170,179), front_right=(181,190),
+                obstacle_thresh=OBSTACLE_THRESH
+            )
+            # Obstacle stop/avoid policy:
+            # - Stop only if BOTH front_left and front_right are blocked
+            # - If any left or right sector is blocked, turn to the free side (override camera turn)
+            # Note: Apply TURN_SIGN to avoidance too so physical turn direction matches wiring.
+            if block["front_left_blocked"] and block["front_right_blocked"]:
+                v_cmd_raw = 0
+                # hold turn 0 while stopped (or we could try to wiggle)
+                w_cmd_raw = 0
+            else:
+                # Not a hard stop -> compute v by distance keeping
+                if d_front is None or not found:
+                    v_cmd_raw = 0
+                else:
+                    if 900 <= d_front <= 1000:
+                        v_cmd_raw = 0
+                    elif d_front > 1000:
+                        err = min(500.0, d_front - 1000.0)
+                        v_cmd_raw = int((err / 500.0) * 20)
+                    else:
+                        err = min(500.0, 900.0 - d_front)
+                        v_cmd_raw = -int((err / 500.0) * 15)
+
+                # Avoidance turn overrides camera when blocked on sides
+                if block["blocked_left"] or block["blocked_right"]:
+                    def enforce_turn_dir(current_w, desired_right, mag):
+                        # desired_right=True means physically turn right; False means turn left
+                        base = mag if desired_right else -mag
+                        target = int(TURN_SIGN * base)
+                        if target >= 0:
+                            return max(current_w, target)
+                        else:
+                            return min(current_w, target)
+
+                    if block["blocked_left"] and not block["blocked_right"]:
+                        # obstacle on left -> turn right (respect TURN_SIGN)
+                        w_cmd_raw = enforce_turn_dir(w_cmd_raw, desired_right=True, mag=int(AVOID_TURN_FACTOR * TURN_GAIN))
+                    elif block["blocked_right"] and not block["blocked_left"]:
+                        # obstacle on right -> turn left (respect TURN_SIGN)
+                        w_cmd_raw = enforce_turn_dir(w_cmd_raw, desired_right=False, mag=int(AVOID_TURN_FACTOR * TURN_GAIN))
+                    else:
+                        # both sides flagged; turn toward larger clearance (respect TURN_SIGN)
+                        lmin = block["left_min"] if block["left_min"] is not None else 0
+                        rmin = block["right_min"] if block["right_min"] is not None else 0
+                        if lmin < rmin:
+                            w_cmd_raw = enforce_turn_dir(w_cmd_raw, desired_right=True, mag=int(AVOID_TURN_FACTOR * TURN_GAIN))
+                        else:
+                            w_cmd_raw = enforce_turn_dir(w_cmd_raw, desired_right=False, mag=int(AVOID_TURN_FACTOR * TURN_GAIN))
+                            
+                        #Turn back 
+                        
             if d_front is None or not found:
                 v_cmd_raw = 0
             else:
@@ -235,8 +335,8 @@ def main():
                     v_cmd_raw = int((err / 500.0) * 20)  # up to 20
                 else:
                     # too close: move backward
-                    err = min(500.0, 900.0 - d_front)
-                    v_cmd_raw = -int((err / 500.0) * 15)  # backward slower up to -15
+                    err = min(400.0, 900.0 - d_front)
+                    v_cmd_raw = -int((err / 400.0) * 20)  # backward slower up to -20
 
             # Apply deadzones
             if abs(w_cmd_raw) < DEADZONE_W:
@@ -257,7 +357,7 @@ def main():
             prev_w_cmd = w_cmd
             prev_v_cmd = v_cmd
 
-            ls, ld, rs, rd = mix_to_wheels(v_cmd, w_cmd, v_max=20, w_max=15)
+            ls, ld, rs, rd = mix_to_wheels(v_cmd, w_cmd, v_max=20, w_max=12)
             motor.send_if_changed(ls, ld, rs, rd)
             # Optional view
             if last_frame is not None:
