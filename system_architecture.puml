@@ -1,0 +1,136 @@
+@startuml follow_bot_components
+!theme plain
+skinparam backgroundColor #FFFFFF
+
+title Kiến Trúc Thành Phần Hệ Thống Follow Bot
+
+package "Input Sensors" as INPUT {
+    component [Camera] as CAM {
+        CAM : 1280x720
+        CAM : 30fps
+    }
+    component [LiDAR] as LIDAR {
+        LIDAR : 360° scan
+        LIDAR : Triangle model
+        LIDAR : Serial COM15
+    }
+}
+
+package "AI/ML Processing" as AI {
+    component [YOLO Person\nDetection] as YOLO_PERSON {
+        YOLO_PERSON : yolo11n.pt
+        YOLO_PERSON : conf=0.5
+        YOLO_PERSON : class=0 (person)
+    }
+    component [YOLO Face\nDetection] as YOLO_FACE {
+        YOLO_FACE : yolov11n-face.pt
+        YOLO_FACE : conf=0.4
+    }
+    component [Appearance\nModel] as APPEAR {
+        APPEAR : Shirt histogram (H-channel)
+        APPEAR : Pants histogram (H+S)
+        APPEAR : Cosine similarity
+    }
+}
+
+package "Tracking & Lock" as TRACK {
+    component [Person Identity\nLock] as PERSON_LOCK {
+        PERSON_LOCK : _shirt_hist (frozen)
+        PERSON_LOCK : _pants_hist (frozen)
+        PERSON_LOCK : Similarity gating
+        PERSON_LOCK : Multi-frame confirmation
+    }
+    component [Face Lock] as FACE_LOCK {
+        FACE_LOCK : face_lock bbox
+        FACE_LOCK : Proximity matching
+        FACE_LOCK : 15 frames timeout
+    }
+    component [Navigation\nBox Selector] as NAV_BOX {
+        NAV_BOX : Prefer: face_lock
+        NAV_BOX : Fallback: person_head
+    }
+}
+
+package "Control Algorithms" as CONTROL {
+    component [Turn Control] as TURN_CTRL {
+        TURN_CTRL : x_norm → w_cmd
+        TURN_CTRL : EMA smoothing
+        TURN_CTRL : TURN_GAIN=18
+    }
+    component [Distance Control] as DIST_CTRL {
+        DIST_CTRL : Target: 900-1000mm
+        DIST_CTRL : d_front → v_cmd
+        DIST_CTRL : Proportional control
+    }
+    component [Obstacle\nAvoidance] as OBS_AVOID {
+        OBS_AVOID : Sector analysis
+        OBS_AVOID : Override turn commands
+        OBS_AVOID : Hard stop logic
+    }
+    component [Command\nFiltering] as FILTER {
+        FILTER : Deadzone removal
+        FILTER : Slew-rate limiting
+        FILTER : Differential drive mixing
+    }
+}
+
+package "Hardware Interface" as HW {
+    component [Motor Controller] as MOTOR {
+        MOTOR : Serial COM20
+        MOTOR : L/R speed+direction
+        MOTOR : send_if_changed()
+    }
+    component [Robot Base] as ROBOT {
+        ROBOT : Differential drive
+        ROBOT : 2 wheels + caster
+    }
+}
+
+package "LiDAR Processing" as LIDAR_PROC {
+    component [Raw Data\nParser] as PARSER {
+        PARSER : Packet decode
+        PARSER : Angle correction
+        PARSER : Checksum verify
+    }
+    component [360° Map\nBuilder] as MAP_BUILDER {
+        MAP_BUILDER : Full rotation detection
+        MAP_BUILDER : Angle binning (1°)
+        MAP_BUILDER : Min distance prefer
+    }
+    component [Sector\nAnalyzer] as SECTOR {
+        SECTOR : Front distance (175-185°)
+        SECTOR : Left/Right clearance
+        SECTOR : Median filtering
+    }
+}
+
+' ===== CONNECTIONS =====
+CAM --> YOLO_PERSON
+CAM --> YOLO_FACE
+
+YOLO_PERSON --> PERSON_LOCK : person detections
+YOLO_FACE --> FACE_LOCK : face detections
+PERSON_LOCK --> APPEAR : appearance matching
+PERSON_LOCK --> NAV_BOX : selected person
+FACE_LOCK --> NAV_BOX : selected face
+
+NAV_BOX --> TURN_CTRL : x_norm
+
+LIDAR --> PARSER
+PARSER --> MAP_BUILDER
+MAP_BUILDER --> SECTOR
+SECTOR --> DIST_CTRL : front distance
+SECTOR --> OBS_AVOID : sector flags
+
+TURN_CTRL --> FILTER : w_cmd
+DIST_CTRL --> FILTER : v_cmd  
+OBS_AVOID --> FILTER : override commands
+FILTER --> MOTOR : left/right commands
+MOTOR --> ROBOT : PWM signals
+
+' ===== THREADING =====
+note top of YOLO_PERSON : Main Thread\n(50ms loop)
+note top of PARSER : Background Thread\n(continuous)
+note top of MOTOR : Main Thread\n(send_if_changed)
+
+@enduml

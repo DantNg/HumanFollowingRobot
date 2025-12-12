@@ -1,0 +1,184 @@
+@startuml follow_bot_algorithm
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Arial
+skinparam defaultFontSize 11
+
+title Thuật Toán Hệ Thống Follow Bot
+
+start
+
+:Khởi tạo hệ thống;
+note right
+- HeadTracker (camera + YOLO)
+- LidarLoop (quét vòng)
+- MotorController (điều khiển bánh xe)
+end note
+
+fork
+    :Camera Thread;
+    repeat
+        :Đọc frame từ camera;
+        :YOLO detect persons (conf=0.5);
+        :YOLO detect faces (conf=0.4);
+        
+        if (Có face detection?) then (yes)
+            if (face_lock == None?) then (yes)
+                :Chọn face lớn nhất\nlàm face_lock;
+            else (no)
+                :Tìm face gần nhất\nvới face_lock cũ;
+                if (Khoảng cách < lock_threshold?) then (yes)
+                    :Cập nhật face_lock;
+                    :face_lost = 0;
+                else (no)
+                    :face_lost += 1;
+                    if (face_lost > max_lost_face_frames?) then (yes)
+                        :face_lock = None;
+                    endif
+                endif
+            endif
+        else (no)
+            :face_lost += 1;
+            if (face_lost > max_lost_face_frames?) then (yes)
+                :face_lock = None;
+            endif
+        endif
+        
+        if (Có person detection?) then (yes)
+            if (locked_target == None?) then (yes)
+                if (_shirt_hist == None?) then (yes)
+                    :Khởi tạo người đầu tiên\n(bbox lớn nhất);
+                    :Lưu shirt_hist + pants_hist;
+                    :_identity_frozen = True;
+                else (no)
+                    :Tìm người phù hợp\nvới appearance;
+                    note right
+                    - Tính similarity (áo + quần)
+                    - Kiểm tra khoảng cách
+                    - Yêu cầu N frames liên tiếp
+                    end note
+                    if (Đạt điều kiện similarity\n+ N frames liên tiếp?) then (yes)
+                        :Reacquire người cũ;
+                        :target_lost_frames = 0;
+                    else (no)
+                        :target_lost_frames += 1;
+                    endif
+                endif
+            else (no)
+                :Tìm person gần nhất\nvới locked_target;
+                if (Trong lock_threshold\n+ similarity đạt?) then (yes)
+                    :Cập nhật locked_target;
+                    :target_lost_frames = 0;
+                else (no)
+                    :target_lost_frames += 1;
+                    if (target_lost_frames > max_lost?) then (yes)
+                        :locked_target = None;
+                        note right: Giữ _shirt_hist
+                    endif
+                endif
+            endif
+        endif
+        
+        :Chọn navigation box;
+        note right
+        Ưu tiên: face_lock > selected_head
+        end note
+        
+        if (nav_box != None?) then (yes)
+            :Tính x_norm = (cx/w)*2-1;
+            :EMA smoothing x_norm;
+            :found = True;
+        else (no)
+            :found = False;
+            :x_norm = 0;
+        endif
+        
+    repeat while (Hệ thống chạy?)
+fork again
+    :LiDAR Thread;
+    repeat
+        :Quét LiDAR 1 vòng đầy đủ;
+        :Lưu scan data;
+    repeat while (Hệ thống chạy?)
+fork again
+    :Main Control Loop;
+    repeat
+        :Lấy trạng thái từ camera;
+        :Lấy scan data từ LiDAR;
+        
+        ' ===== ANGULAR COMMAND =====
+        if (found?) then (yes)
+            :w_cmd_raw = TURN_SIGN × x_norm × TURN_GAIN;
+        else (no)
+            :w_cmd_raw = 0;
+        endif
+        
+        ' ===== LINEAR COMMAND =====
+        :d_front = median(LiDAR[175°-185°]);
+        :EMA smooth d_front;
+        
+        if (d_front in [900,1000]mm?) then (yes)
+            :v_cmd_raw = 0 (đứng yên);
+        elseif (d_front > 1000mm?) then (yes)
+            :v_cmd_raw = tiến tới\n(tỷ lệ với khoảng cách);
+        else (no)
+            :v_cmd_raw = lùi lại\n(tỷ lệ với khoảng cách);
+        endif
+        
+        ' ===== OBSTACLE AVOIDANCE =====
+        :Kiểm tra sector trái/phải\nvà front_left/front_right;
+        
+        if (front_left_blocked && front_right_blocked?) then (yes)
+            :HARD STOP;
+            :v_cmd_raw = 0;
+            :w_cmd_raw = 0;
+        else (no)
+            if (blocked_left && !blocked_right?) then (yes)
+                :Override w_cmd_raw\n→ quay phải tránh;
+            elseif (blocked_right && !blocked_left?) then (yes)
+                :Override w_cmd_raw\n→ quay trái tránh;
+            elseif (blocked_left && blocked_right?) then (yes)
+                :Quay về phía có\nclearance lớn hơn;
+            endif
+        endif
+        
+        ' ===== FILTERING =====
+        :Áp dụng deadzone\n(loại bỏ lệnh nhỏ);
+        :Áp dụng slew-rate limit\n(giới hạn thay đổi);
+        
+        ' ===== MOTOR MIXING =====
+        :left = v_cmd - w_cmd;
+        :right = v_cmd + w_cmd;
+        :Chuyển đổi sang\n(speed, direction);
+        :Gửi lệnh tới MCU;
+        
+        :Vẽ overlay trên frame;
+        note right
+        - Person bbox (blue)
+        - Head bbox (green)  
+        - Face bbox (cyan)
+        - Center lines
+        - Status text
+        end note
+        
+        :sleep(50ms);
+        
+    repeat while (ESC not pressed?)
+end fork
+
+:Dừng tất cả motors;
+:Giải phóng tài nguyên;
+
+stop
+
+' ===== LEGEND =====
+legend right
+|= Màu |= Ý nghĩa |
+|<#lightblue> Blue | Person detection/lock |
+|<#lightgreen> Green | Head tracking |
+|<#lightcyan> Cyan | Face detection/lock |
+|<#lightyellow> Yellow | LiDAR processing |
+|<#lightpink> Pink | Motor control |
+endlegend
+
+@enduml

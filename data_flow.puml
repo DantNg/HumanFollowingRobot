@@ -1,0 +1,86 @@
+@startuml follow_bot_data_flow
+!theme plain
+skinparam backgroundColor #FFFFFF
+
+title Luồng Dữ Liệu Hệ Thống Follow Bot
+
+actor "Người được theo" as PERSON
+database "Frame Buffer" as FRAME_BUF
+database "LiDAR Buffer" as LIDAR_BUF
+database "Identity Template" as IDENTITY
+
+' ===== INPUT STAGE =====
+PERSON --> CAM : Hình ảnh
+CAM --> FRAME_BUF : Frame 1280x720
+
+PERSON --> LIDAR : Phản xạ laser  
+LIDAR --> LIDAR_BUF : Raw packets
+
+' ===== PROCESSING STAGE =====
+FRAME_BUF --> YOLO_PERSON : BGR → RGB
+FRAME_BUF --> YOLO_FACE : BGR → RGB
+
+YOLO_PERSON --> DETECT_PROC : Person bboxes
+YOLO_FACE --> DETECT_PROC : Face bboxes
+
+DETECT_PROC --> IDENTITY : Appearance histograms
+IDENTITY --> DETECT_PROC : Similarity scores
+
+DETECT_PROC --> NAV_DECISION : Navigation box
+NAV_DECISION --> X_NORM : Pixel → normalized
+
+X_NORM --> EMA_FILTER : Raw x_norm
+EMA_FILTER --> TURN_CMD : Smoothed x_norm
+
+LIDAR_BUF --> LIDAR_PROC : Raw data
+LIDAR_PROC --> DISTANCE_MAP : 360° distances
+DISTANCE_MAP --> FRONT_DIST : Median filter
+DISTANCE_MAP --> SECTOR_FLAGS : Obstacle detection
+
+FRONT_DIST --> SPEED_CMD : Distance error
+SECTOR_FLAGS --> AVOID_CMD : Override logic
+
+' ===== COMMAND FUSION =====
+TURN_CMD --> CMD_FILTER : w_raw
+SPEED_CMD --> CMD_FILTER : v_raw
+AVOID_CMD --> CMD_FILTER : override
+
+CMD_FILTER --> DEADZONE : Remove small commands
+DEADZONE --> SLEW_LIMIT : Limit rate change
+SLEW_LIMIT --> DIFF_DRIVE : v_cmd, w_cmd
+
+DIFF_DRIVE --> MOTOR_CMD : left/right speeds
+MOTOR_CMD --> ROBOT : PWM signals
+
+ROBOT --> PERSON : Physical following
+
+' ===== FEEDBACK LOOPS =====
+X_NORM -.-> EMA_FILTER : Previous value
+FRONT_DIST -.-> EMA_FILTER : Previous distance
+SLEW_LIMIT -.-> SLEW_LIMIT : Previous commands
+
+' ===== DATA ANNOTATIONS =====
+note right of YOLO_PERSON
+  Input: BGR frame
+  Output: [(x1,y1,x2,y2), conf]
+  Filter: conf ≥ 0.5, class=0
+end note
+
+note right of IDENTITY
+  shirt_hist: H-channel 16 bins
+  pants_hist: H+S channels 32 bins
+  Frozen after first lock
+end note
+
+note bottom of CMD_FILTER
+  Deadzone: |cmd| < threshold → 0
+  Slew: |Δcmd| < max_step
+  Safety: Always applicable
+end note
+
+' ===== TIMING =====
+note top of FRAME_BUF : 30fps
+note top of LIDAR_BUF : ~10Hz full rotations
+note bottom of ROBOT : 20Hz control loop
+
+@enduml

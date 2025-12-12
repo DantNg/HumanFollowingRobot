@@ -1,0 +1,62 @@
+@startuml follow_bot_state_machine
+!theme plain
+skinparam backgroundColor #FFFFFF
+
+title State Machine - Identity & Face Lock System
+
+state "Chưa khởi tạo" as INIT {
+    INIT : _shirt_hist = None
+    INIT : face_lock = None
+    INIT : locked_target = None
+}
+
+state "Có danh tính người" as HAS_IDENTITY {
+    HAS_IDENTITY : _shirt_hist ≠ None
+    HAS_IDENTITY : _identity_frozen = True
+    
+    state "Person Locked" as PERSON_LOCKED {
+        PERSON_LOCKED : locked_target ≠ None
+        PERSON_LOCKED : Tracking người theo appearance
+    }
+    
+    state "Person Lost" as PERSON_LOST {
+        PERSON_LOST : locked_target = None
+        PERSON_LOST : Tìm lại người cũ theo similarity
+        PERSON_LOST : Không nhận người mới
+    }
+}
+
+state "Face Lock States" as FACE_STATES {
+    state "Face Locked" as FACE_LOCKED {
+        FACE_LOCKED : face_lock ≠ None
+        FACE_LOCKED : Ưu tiên face cho navigation
+    }
+    
+    state "Face Lost" as FACE_LOST {
+        FACE_LOST : face_lock = None
+        FACE_LOST : Dùng person head cho navigation
+    }
+}
+
+INIT --> HAS_IDENTITY : Detect person đầu tiên\n(lưu appearance)
+HAS_IDENTITY --> PERSON_LOCKED : Lock thành công
+PERSON_LOCKED --> PERSON_LOST : target_lost_frames > max\n(giữ _shirt_hist)
+PERSON_LOST --> PERSON_LOCKED : Reacquire người cũ\n(similarity + N frames)
+
+INIT --> FACE_LOCKED : Detect face đầu tiên
+FACE_LOCKED --> FACE_LOST : face_lost > max_lost_face_frames
+FACE_LOST --> FACE_LOCKED : Detect face trong lock_threshold
+
+note right of HAS_IDENTITY
+Một khi có danh tính,
+KHÔNG BAO GIỜ nhận
+người mới khác
+end note
+
+note bottom of FACE_STATES
+Face lock độc lập
+với person lock,
+ưu tiên cho navigation
+end note
+
+@enduml

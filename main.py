@@ -251,9 +251,9 @@ def mix_to_wheels(v_cmd, w_cmd, v_max=20, w_max=20):
 # ---------------- Main control ----------------
 
 def main():
-    motor = MotorController(port="COM20", baudrate=115200)
+    motor = MotorController(port="COM3", baudrate=115200)
     tracker = HeadTracker(cam_index=0, model_path="yolo11n.pt")
-    lidar_loop = LidarLoop(port="COM15", baud=115200)
+    lidar_loop = LidarLoop(port="COM5", baud=115200)
     lidar_loop.start()
     try:
         prev_v_cmd = 0
